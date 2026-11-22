@@ -119,6 +119,23 @@ pub struct BandMemory {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
+pub struct UpdateSettings {
+    /// Look for a new version at startup and once a day.
+    pub auto_check: bool,
+    /// A version the user chose not to install; not offered again.
+    pub skipped_version: Option<String>,
+    /// When the last automatic check ran, Unix seconds.
+    pub last_check_unix: i64,
+}
+
+impl Default for UpdateSettings {
+    fn default() -> Self {
+        UpdateSettings { auto_check: true, skipped_version: None, last_check_unix: 0 }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct Settings {
     /// Run against the simulated rig and IF instead of hardware.
     pub demo: bool,
@@ -137,6 +154,7 @@ pub struct Settings {
     /// Last frequency and mode used on each band, by band name.
     pub band_memory: BTreeMap<String, BandMemory>,
     pub spots_panel: bool,
+    pub updates: UpdateSettings,
 }
 
 impl Default for Settings {
@@ -154,6 +172,7 @@ impl Default for Settings {
             pota: PotaSettings::default(),
             band_memory: BTreeMap::new(),
             spots_panel: true,
+            updates: UpdateSettings::default(),
         }
     }
 }

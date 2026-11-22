@@ -28,8 +28,15 @@ fn main() -> eframe::Result {
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
         match arg.as_str() {
-            "--demo" => launch.demo = true,
-            "--opengl" => opengl = true,
+            "--demo" => {
+                launch.demo = true;
+                launch.passthrough_args.push(arg);
+            }
+            "--opengl" => {
+                opengl = true;
+                launch.passthrough_args.push(arg);
+            }
+            "--updated" => launch.just_updated = true,
             "--screenshot" => launch.screenshot = args.next().map(Into::into),
             "--screenshot-after" => {
                 if let Some(s) = args.next().and_then(|v| v.parse::<f64>().ok()) {
@@ -46,6 +53,11 @@ fn main() -> eframe::Result {
         }
     }
 
+    if launch.just_updated {
+        // The previous version is still closing: give it a moment to release
+        // the COM port and the RTL-SDR (both are retried anyway).
+        std::thread::sleep(Duration::from_secs(1));
+    }
     seventy3::logging::init();
     log::info!("Seventy3 {} starting", env!("CARGO_PKG_VERSION"));
     let settings = Settings::load();

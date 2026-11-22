@@ -1,0 +1,142 @@
+name: Release
+
+# Builds seventy3.exe on Windows, writes the update manifest (release.json),
+# signs it, and publishes a GitHub release with all three files.
+#
+# Start it by pushing a tag (v0.2.0), or from the Actions tab with a version
+# (the tag is then created on the chosen branch's commit).
+#
+# Signing: the SEVENTY3_SIGNING_KEY secret holds the Ed25519 private key
+# whose public half is in src/update.rs (TRUSTED_KEYS). The signature is
+# checked against the keys built into the exe, so a wrong secret fails the
+# run. Without the secret the release is left as a draft: installed copies
+# only accept signed updates. Add the secret and run this workflow again with
+# the same version to sign and publish it. See docs/releasing.md.
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to release, e.g. 0.2.0 (must match Cargo.toml)'
+        required: true
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.event.inputs.version || github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Work out the version
+        env:
+          INPUT_VERSION: ${{ github.event.inputs.version }}
+        run: |
+          if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
+            VERSION="${INPUT_VERSION#v}"
+          else
+            VERSION="${GITHUB_REF_NAME#v}"
+          fi
+          TAG="v$VERSION"
+          # Rebuilding an existing tag: build exactly what it points at.
+          if git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
+            git checkout -q "$TAG"
+          fi
+          CARGO_VERSION=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)
+          if [ "$CARGO_VERSION" != "$VERSION" ]; then
+            echo "::error::Cargo.toml says $CARGO_VERSION but the release is $VERSION"
+            exit 1
+          fi
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+          echo "TAG=$TAG" >> "$GITHUB_ENV"
+          echo "COMMIT=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
+
+      - name: Release notes from CHANGELOG.md
+        run: |
+          mkdir -p dist
+          awk -v v="$VERSION" '
+            index($0, "## [" v "]") == 1 { on = 1; next }
+            on && /^## \[/ { exit }
+            on { print }
+          ' CHANGELOG.md | sed -e '/./,$!d' > dist/notes.md
+          if [ ! -s dist/notes.md ]; then
+            echo "::error::CHANGELOG.md has no section for [$VERSION]"
+            exit 1
+          fi
+          {
+            cat dist/notes.md
+            echo
+            echo '---'
+            echo
+            echo '**Install:** download `seventy3.exe` below and run it; no installer needed. First time? The [README](https://github.com/KK4ODA/Seventy3#windows-setup) covers the RTL-SDR driver and CAT setup.'
+            echo
+            echo '**Already using Seventy3?** It offers this update by itself and installs it with one click. Updates are signed, and Seventy3 checks the signature and the SHA-256 of the program before installing.'
+          } > release-body.md
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build
+        run: cargo build --release --locked
+
+      - name: Write the update manifest
+        run: |
+          cp target/release/seventy3.exe dist/
+          target/release/release-sign.exe manifest --version "$VERSION" --released "$(date -u +%F)" \
+            --notes-file dist/notes.md --out dist/release.json dist/seventy3.exe
+          cat dist/release.json
+
+      - name: Sign
+        env:
+          SEVENTY3_SIGNING_KEY: ${{ secrets.SEVENTY3_SIGNING_KEY }}
+        run: |
+          if [ -z "$SEVENTY3_SIGNING_KEY" ]; then
+            echo "::warning::The SEVENTY3_SIGNING_KEY secret is missing, so this release can't be signed. It will be left as a draft; add the secret and run the Release workflow again for $VERSION."
+            echo "SIGNED=false" >> "$GITHUB_ENV"
+            exit 0
+          fi
+          target/release/release-sign.exe sign --in dist/release.json --out dist/release.json.sig
+          target/release/release-sign.exe verify --in dist/release.json --sig dist/release.json.sig
+          echo "SIGNED=true" >> "$GITHUB_ENV"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: seventy3-${{ env.VERSION }}-windows-x64
+          path: dist/
+
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          FILES="dist/seventy3.exe dist/release.json"
+          if [ "$SIGNED" = "true" ]; then FILES="$FILES dist/release.json.sig"; fi
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            # Re-run (usually to sign a draft): replace the files.
+            gh release upload "$TAG" $FILES --clobber
+            gh release edit "$TAG" --notes-file release-body.md --target "$COMMIT"
+            if [ "$SIGNED" = "true" ]; then
+              gh release edit "$TAG" --draft=false --latest
+            fi
+          else
+            DRAFT=""
+            if [ "$SIGNED" != "true" ]; then DRAFT="--draft"; fi
+            gh release create "$TAG" $FILES $DRAFT --target "$COMMIT" \
+              --title "Seventy3 $VERSION" --notes-file release-body.md
+          fi
+          if [ "$SIGNED" = "true" ]; then
+            echo "Published https://github.com/$GITHUB_REPOSITORY/releases/tag/$TAG" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "Draft created for $TAG: add the SEVENTY3_SIGNING_KEY secret, then run this workflow again with version $VERSION." >> "$GITHUB_STEP_SUMMARY"
+          fi

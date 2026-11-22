@@ -5,8 +5,11 @@ edition = "2024"
 rust-version = "1.88"
 description = "Panadapter, waterfall and CAT control for the Kenwood TS-480, fed by an RTL-SDR on the rig's first IF"
 repository = "https://github.com/KK4ODA/Seventy3"
+license = "GPL-3.0-or-later"
 readme = "README.md"
 publish = false
+# `release-sign` is a maintainer tool; `cargo run` means the app.
+default-run = "seventy3"
 
 [dependencies]
 # UI. wgpu (Direct3D 12 on Windows) is the default renderer; glow (OpenGL) is
@@ -26,6 +29,11 @@ serde_json = "1"
 directories = "6"
 log = "0.4"
 png = "0.18"
+# Updates: releases carry an Ed25519-signed manifest of SHA-256 hashes.
+ed25519-dalek = "3"
+sha2 = "0.11"
+base64 = "0.23"
+getrandom = "0.4"
 
 [profile.dev]
 opt-level = 1

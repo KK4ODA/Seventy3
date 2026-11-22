@@ -7,6 +7,7 @@ use crate::config::{Palette, Settings};
 use crate::dsp::ifmap::TS480_FIRST_IF_HZ;
 use crate::rig::serial::{BAUD_RATES, PortInfo, list_ports};
 use crate::sdr::SAMPLE_RATES;
+use crate::update::{RELEASES_PAGE, UpdateState};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Tab {
@@ -15,6 +16,7 @@ pub enum Tab {
     Receiver,
     Display,
     Tuning,
+    About,
 }
 
 #[derive(Default)]
@@ -24,8 +26,23 @@ pub struct SettingsUi {
     ports: Option<Vec<PortInfo>>,
 }
 
+/// What the About tab shows about updates, and what the user asked for.
+pub struct UpdatesView<'a> {
+    pub state: &'a UpdateState,
+    /// Seconds since the last check, if there was one this session.
+    pub last_check_secs: Option<u64>,
+    pub check_now: bool,
+    pub install: bool,
+}
+
 /// Shows the window. Edits `settings` in place; the caller notices changes.
-pub fn show(ctx: &egui::Context, ui_state: &mut SettingsUi, settings: &mut Settings, gains: &[i32]) {
+pub fn show(
+    ctx: &egui::Context,
+    ui_state: &mut SettingsUi,
+    settings: &mut Settings,
+    gains: &[i32],
+    updates: &mut UpdatesView<'_>,
+) {
     let mut open = ui_state.open;
     egui::Window::new("Settings").open(&mut open).resizable(false).collapsible(false).default_width(460.0).show(
         ctx,
@@ -36,6 +53,7 @@ pub fn show(ctx: &egui::Context, ui_state: &mut SettingsUi, settings: &mut Setti
                     (Tab::Receiver, "IF receiver"),
                     (Tab::Display, "Display"),
                     (Tab::Tuning, "Tuning"),
+                    (Tab::About, "About"),
                 ] {
                     ui.selectable_value(&mut ui_state.tab, tab, name);
                 }
@@ -46,6 +64,7 @@ pub fn show(ctx: &egui::Context, ui_state: &mut SettingsUi, settings: &mut Setti
                 Tab::Receiver => receiver_tab(ui, settings, gains),
                 Tab::Display => display_tab(ui, settings),
                 Tab::Tuning => tuning_tab(ui, settings),
+                Tab::About => about_tab(ui, settings, updates),
             }
         },
     );
@@ -301,4 +320,53 @@ fn tuning_tab(ui: &mut Ui, s: &mut Settings) {
         ui.end_row();
     });
     hint(ui, "Shift + wheel tunes in 10× steps; Ctrl + wheel zooms. Drag the panadapter to slide the band.");
+}
+
+fn about_tab(ui: &mut Ui, s: &mut Settings, u: &mut UpdatesView<'_>) {
+    ui.label(RichText::new(format!("Seventy3 {}", env!("CARGO_PKG_VERSION"))).heading());
+    ui.label("Panadapter, waterfall and CAT control for the Kenwood TS-480.");
+    ui.add_space(8.0);
+
+    ui.label(RichText::new("Updates").strong());
+    ui.checkbox(&mut s.updates.auto_check, "Check for new versions automatically (daily)");
+    ui.horizontal(|ui| {
+        let busy = matches!(u.state, UpdateState::Checking | UpdateState::Downloading { .. });
+        if ui.add_enabled(!busy, egui::Button::new("Check now")).clicked() {
+            u.check_now = true;
+        }
+        let (text, color) = match u.state {
+            UpdateState::Idle => ("Not checked yet".to_owned(), theme::TEXT_DIM),
+            UpdateState::Checking => ("Checking…".to_owned(), theme::TEXT_DIM),
+            UpdateState::UpToDate => ("You have the latest version".to_owned(), theme::OK),
+            UpdateState::Available(a) => (format!("Version {} is available", a.version()), theme::ACCENT),
+            UpdateState::Downloading { version, done, total } => {
+                (format!("Downloading {version}: {}%", done * 100 / (*total).max(1)), theme::TEXT_DIM)
+            }
+            UpdateState::Installed { version } => (format!("{version} installed; restarting…"), theme::OK),
+            UpdateState::Failed(e) => (e.clone(), theme::WARN),
+        };
+        ui.label(RichText::new(text).color(color));
+    });
+    if let UpdateState::Available(a) = u.state
+        && ui.button(RichText::new(format!("Install {} and restart", a.version())).strong()).clicked()
+    {
+        u.install = true;
+    }
+    if let Some(secs) = u.last_check_secs {
+        hint(ui, &format!("Last checked {} min ago.", secs / 60));
+    }
+    hint(
+        ui,
+        "Updates come from the project's GitHub releases. Each one is signed, and Seventy3 checks the \
+         signature and the file's SHA-256 before installing. It never installs while you're transmitting.",
+    );
+    ui.hyperlink_to("All releases", RELEASES_PAGE);
+
+    ui.add_space(8.0);
+    ui.label(RichText::new("License").strong());
+    ui.label(
+        "Seventy3 is free software under the GNU General Public License, version 3 or later. \
+         It comes with no warranty.",
+    );
+    ui.hyperlink_to("Source code", "https://github.com/KK4ODA/Seventy3");
 }

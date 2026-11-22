@@ -26,6 +26,7 @@ use crate::rig::{Notify, Opener, RigHandle, RigOptions, RigState, Transport};
 use crate::sdr::rtl::RtlSource;
 use crate::sdr::synth::SynthSource;
 use crate::sdr::{IqSource, SdrHandle, SourceFactory};
+use crate::update::{self, UpdateState, Updater, UpdaterConfig};
 use panadapter::{PanAction, PanInput, PanState, Trace, TuneTracker};
 use settings::SettingsUi;
 use spots::SpotsState;
@@ -43,6 +44,10 @@ pub struct LaunchOptions {
     /// Initial dial frequency for the demo rig.
     pub demo_freq_hz: Option<u64>,
     pub zoom: Option<u32>,
+    /// Options to pass on when restarting after an update.
+    pub passthrough_args: Vec<String>,
+    /// This run was started by an update; say so.
+    pub just_updated: bool,
 }
 
 struct Calibration {
@@ -81,6 +86,16 @@ pub struct App {
     keyboard_ptt: bool,
     calibration: Option<Calibration>,
     toasts: Vec<(String, Instant, Color32)>,
+
+    updater: Updater,
+    /// The running program, captured at startup (an update renames it).
+    exe: Option<PathBuf>,
+    /// The user clicked "Later" on the update banner this session.
+    update_dismissed: bool,
+    update_notes_open: bool,
+    /// The user asked to install, so install failures are shown in the banner.
+    install_requested: bool,
+    restarting: bool,
 
     launch: LaunchOptions,
     started: Instant,
@@ -175,6 +190,15 @@ impl App {
         let rig = build_rig(&settings, sim.as_ref(), &notify);
         let sdr = build_sdr(&settings, sim.as_ref(), &notify);
         let spots = build_spots(&settings, &notify);
+        let exe = std::env::current_exe().ok();
+        if let Some(exe) = &exe {
+            update::clean_up_after_update(exe.clone());
+        }
+        let updater = Updater::spawn(UpdaterConfig { exe: exe.clone(), ..UpdaterConfig::default() }, notify.clone());
+        let mut toasts = Vec::new();
+        if launch.just_updated {
+            toasts.push((format!("Updated to Seventy3 {}", env!("CARGO_PKG_VERSION")), Instant::now(), theme::OK));
+        }
         App {
             saved: settings.clone(),
             built: settings.clone(),
@@ -201,7 +225,13 @@ impl App {
             tune: TuneTracker::default(),
             keyboard_ptt: false,
             calibration: None,
-            toasts: Vec::new(),
+            toasts,
+            updater,
+            exe,
+            update_dismissed: false,
+            update_notes_open: false,
+            install_requested: false,
+            restarting: false,
             launch,
             started: Instant::now(),
             screenshot_requested: false,
@@ -771,6 +801,118 @@ impl App {
             });
     }
 
+    // ---- updates ----------------------------------------------------------------
+
+    /// Starts the daily automatic check when it is due.
+    fn auto_check_updates(&mut self) {
+        let u = &self.settings.updates;
+        let due = u.auto_check
+            && self.launch.screenshot.is_none()
+            && self.started.elapsed() > Duration::from_secs(8)
+            && now_unix() - u.last_check_unix > 24 * 3600;
+        let idle = matches!(self.updater.state(), UpdateState::Idle | UpdateState::UpToDate | UpdateState::Failed(_));
+        if due && idle {
+            self.settings.updates.last_check_unix = now_unix();
+            self.updater.check_now();
+        }
+    }
+
+    fn install_update(&mut self) {
+        self.install_requested = true;
+        self.updater.install();
+    }
+
+    /// The new version is in place: start it and close this one, once the
+    /// rig isn't transmitting.
+    fn restart_if_installed(&mut self, ctx: &egui::Context, rig: &RigState) {
+        let UpdateState::Installed { version } = self.updater.state() else { return };
+        if self.restarting || rig.transmitting || rig.ptt_engaged {
+            return;
+        }
+        let Some(exe) = self.exe.clone() else { return };
+        // The new process reads the settings, so they must be on disk first.
+        self.settings.save();
+        self.saved = self.settings.clone();
+        match std::process::Command::new(&exe).args(&self.launch.passthrough_args).arg("--updated").spawn() {
+            Ok(_) => {
+                log::info!("Restarting into Seventy3 {version}");
+                self.restarting = true;
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            }
+            Err(e) => {
+                log::warn!("Couldn't start the new version: {e}");
+                self.restarting = true;
+                self.toast(format!("Seventy3 {version} is installed. Restart Seventy3 to use it."), theme::OK);
+            }
+        }
+    }
+
+    fn update_banner(&mut self, ui: &mut Ui, rig: &RigState) {
+        let state = self.updater.state();
+        let on_air = rig.transmitting || rig.ptt_engaged;
+        ui.horizontal(|ui| match &state {
+            UpdateState::Available(a) => {
+                ui.label(RichText::new(format!("Seventy3 {} is available", a.version())).strong().color(theme::ACCENT));
+                ui.label(RichText::new(format!("(you have {})", env!("CARGO_PKG_VERSION"))).color(theme::TEXT_DIM));
+                if ui.selectable_label(self.update_notes_open, "What's new").clicked() {
+                    self.update_notes_open = !self.update_notes_open;
+                }
+                let install = ui
+                    .add_enabled(!on_air, egui::Button::new(RichText::new("Update and restart").strong()))
+                    .on_disabled_hover_text("Not while transmitting");
+                if install.clicked() {
+                    self.install_update();
+                }
+                if ui.button("Skip this version").clicked() {
+                    self.settings.updates.skipped_version = Some(a.version().to_owned());
+                }
+                if ui.button("Later").clicked() {
+                    self.update_dismissed = true;
+                }
+            }
+            UpdateState::Downloading { version, done, total } => {
+                ui.label(format!("Downloading Seventy3 {version}…"));
+                ui.add(
+                    egui::ProgressBar::new(*done as f32 / (*total).max(1) as f32)
+                        .desired_width(240.0)
+                        .show_percentage(),
+                );
+            }
+            UpdateState::Installed { version } => {
+                let text = if on_air {
+                    format!("Seventy3 {version} is installed. Restarting when you stop transmitting.")
+                } else {
+                    format!("Seventy3 {version} is installed. Restarting…")
+                };
+                ui.label(RichText::new(text).color(theme::OK));
+            }
+            UpdateState::Failed(e) => {
+                ui.label(RichText::new(format!("Update failed: {e}")).color(theme::WARN));
+                ui.hyperlink_to("Releases page", update::RELEASES_PAGE);
+                if ui.button("Close").clicked() {
+                    self.install_requested = false;
+                }
+            }
+            _ => {}
+        });
+        if let (true, UpdateState::Available(a)) = (self.update_notes_open, &state) {
+            egui::ScrollArea::vertical().max_height(160.0).show(ui, |ui| {
+                ui.label(&a.manifest.notes);
+            });
+        }
+    }
+
+    fn show_update_banner(&self) -> bool {
+        match self.updater.state() {
+            UpdateState::Available(a) => {
+                !self.update_dismissed && self.settings.updates.skipped_version.as_deref() != Some(a.version())
+            }
+            UpdateState::Downloading { .. } | UpdateState::Installed { .. } => true,
+            UpdateState::Failed(_) => self.install_requested,
+            _ => false,
+        }
+    }
+
     fn handle_screenshot(&mut self, ctx: &egui::Context) {
         let Some(path) = self.launch.screenshot.clone() else { return };
         if !self.screenshot_requested && self.started.elapsed() >= self.launch.screenshot_after {
@@ -838,6 +980,16 @@ impl eframe::App for App {
                     .stroke(Stroke::new(1.0, theme::BORDER)),
             )
             .show(ui, |ui| self.tool_bar(ui));
+        if self.show_update_banner() {
+            egui::Panel::top("update")
+                .frame(
+                    egui::Frame::new()
+                        .fill(theme::RAISED)
+                        .inner_margin(Margin::symmetric(12, 6))
+                        .stroke(Stroke::new(1.0, theme::ACCENT.gamma_multiply(0.6))),
+                )
+                .show(ui, |ui| self.update_banner(ui, &rig));
+        }
         egui::Panel::bottom("status")
             .frame(egui::Frame::new().fill(theme::PANEL).inner_margin(Margin::symmetric(12, 4)))
             .show(ui, |ui| self.status_bar(ui, &rig));
@@ -896,7 +1048,24 @@ impl eframe::App for App {
             self.handle_pan_action(action, &rig);
         }
 
-        settings::show(&ctx, &mut self.settings_ui, &mut self.settings, &sdr_status.gains_tenths_db);
+        let update_state = self.updater.state();
+        let mut updates_view = settings::UpdatesView {
+            state: &update_state,
+            last_check_secs: self.updater.last_check().map(|t| t.elapsed().as_secs()),
+            check_now: false,
+            install: false,
+        };
+        settings::show(&ctx, &mut self.settings_ui, &mut self.settings, &sdr_status.gains_tenths_db, &mut updates_view);
+        let (check_now, install) = (updates_view.check_now, updates_view.install);
+        if check_now {
+            self.update_dismissed = false;
+            self.updater.check_now();
+        }
+        if install && !(rig.transmitting || rig.ptt_engaged) {
+            self.install_update();
+        }
+        self.auto_check_updates();
+        self.restart_if_installed(&ctx, &rig);
         self.calibration_window(&ctx);
         self.welcome_window(&ctx);
 

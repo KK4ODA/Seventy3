@@ -10,3 +10,4 @@ pub mod pota;
 pub mod rig;
 pub mod sdr;
 pub mod ui;
+pub mod update;

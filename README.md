@@ -29,10 +29,12 @@ Seventy3 shows you the band and steers the radio.
   to a known carrier (WWV, CHU) and click it.
 - **Band memory**, DSP filter passband overlay, auto-levelling colour scale,
   four colour palettes, peak hold.
+- **Signed automatic updates.** Seventy3 checks for a new version daily and
+  installs it with one click (never while you're transmitting).
 
 ## Status
 
-Version 0.1, the first working version. Everything above works against the
+Version 0.1.0, the first release. Everything above works against the
 built-in TS-480 simulator and synthetic IF, and is covered by automated
 tests. **It has not yet been tested on a real TS-480 and RTL-SDR.** Expect to
 check the items in [First run on real hardware](#first-run-on-real-hardware).
@@ -61,10 +63,12 @@ check the items in [First run on real hardware](#first-run-on-real-hardware).
    **Bulk-In, Interface (Interface 0)**, select **WinUSB**, and click
    *Replace Driver*. (Skip this if SDR#, SDR++ or HDSDR already work with the
    dongle.)
-2. Download `seventy3.exe` from the latest successful
-   [CI run](https://github.com/KK4ODA/Seventy3/actions/workflows/ci.yml)
-   (artifact **seventy3-windows-x64**; GitHub asks you to sign in to download
-   artifacts) and run it. No installer is needed.
+2. Download `seventy3.exe` from the
+   [latest release](https://github.com/KK4ODA/Seventy3/releases/latest), put
+   it in a folder you can write to (for example `Documents\Seventy3`, not
+   `Program Files`, so it can update itself), and run it. No installer is
+   needed. Windows may warn that the program is from an unknown publisher:
+   choose *More info → Run anyway*.
 3. On the welcome screen choose **Set up my TS-480** and pick the CAT port,
    or **Try the demo**.
 
@@ -81,6 +85,17 @@ check the items in [First run on real hardware](#first-run-on-real-hardware).
    AM, click **Calibrate**, zoom in, and click the centre of the carrier.
 4. **Gain.** Raise the RF gain until the noise floor lifts off the bottom of
    the spectrum, then back off if *ADC overload* appears.
+
+## Updates
+
+Seventy3 looks for a new release at startup and once a day (Settings →
+About turns this off or checks now). When one is available, a bar offers
+*Update and restart*. Every release's file list is signed with the project's
+Ed25519 key, and Seventy3 checks that signature and the SHA-256 of the
+download before replacing itself, so it installs nothing that didn't come
+from this project's release workflow. The previous version is kept as
+`seventy3.old.exe` until the new one starts. Releasing is described in
+[docs/releasing.md](docs/releasing.md).
 
 ## Controls
 
@@ -133,6 +148,13 @@ Settings are saved to `%APPDATA%\Seventy3\config\settings.json`; the log is
 `%LOCALAPPDATA%\Seventy3\data\seventy3.log` (`SEVENTY3_LOG=trace` logs every
 CAT command). If the window doesn't appear on an older graphics driver, start
 with `seventy3.exe --opengl`.
+
+## License
+
+Seventy3 is free software: you can redistribute it and/or modify it under the
+terms of the GNU General Public License as published by the Free Software
+Foundation, either version 3 of the License, or (at your option) any later
+version. See [LICENSE](LICENSE). It comes with no warranty.
 
 ## Roadmap
 
