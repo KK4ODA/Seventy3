@@ -62,14 +62,12 @@ impl IqSource for RtlSource {
                     out.clear();
                     out.reserve(data.len() / 2);
                     let mut clipped = 0;
-                    for iq in data.chunks_exact(2) {
-                        if iq[0] == 0 || iq[0] == 255 || iq[1] == 0 || iq[1] == 255 {
+                    let (pairs, _) = data.as_chunks::<2>();
+                    for &[i, q] in pairs {
+                        if i == 0 || i == 255 || q == 0 || q == 255 {
                             clipped += 1;
                         }
-                        out.push(Complex32::new(
-                            (f32::from(iq[0]) - 127.4) / 128.0,
-                            (f32::from(iq[1]) - 127.4) / 128.0,
-                        ));
+                        out.push(Complex32::new((f32::from(i) - 127.4) / 128.0, (f32::from(q) - 127.4) / 128.0));
                     }
                     return Ok(ReadStats { clipped });
                 }
