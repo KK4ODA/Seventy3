@@ -4,6 +4,12 @@ All notable changes to Seventy3 are listed here. The release workflow copies
 each version's section into its GitHub release and into the signed update
 manifest, so it is what the in-app "What's new" shows.
 
+## [Unreleased]
+
+### Added
+
+- Quick Start Guide (PDF) in `docs/`, attached to every release.
+
 ## [0.1.0] - 2026-11-22
 
 First release. Tested against the built-in TS-480 simulator; not yet tested

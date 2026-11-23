@@ -1,0 +1,39 @@
+name: Attach Quick Start Guide
+
+# Uploads docs/Seventy3-Quick-Start.pdf to an existing release, replacing any
+# older copy, without rebuilding or re-signing the program. Use it after
+# correcting the guide; new releases get the guide from the Release workflow.
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag, e.g. v0.1.0'
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  attach:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Upload the guide
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.inputs.tag }}
+        run: |
+          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null
+          gh release upload "$TAG" docs/Seventy3-Quick-Start.pdf --clobber --repo "$GITHUB_REPOSITORY"
+          # Point readers at it, once.
+          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json body --jq .body > body.md
+          if ! grep -q "Quick Start Guide" body.md; then
+            {
+              echo
+              echo '**New to Seventy3?** Follow the **Quick Start Guide** (`Seventy3-Quick-Start.pdf`, below): it covers the RTL-SDR driver, connecting the TS-480, calibration and a first transmit test.'
+            } >> body.md
+            gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --notes-file body.md
+          fi
+          echo "Attached the Quick Start Guide to $TAG" >> "$GITHUB_STEP_SUMMARY"

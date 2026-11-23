@@ -10,6 +10,11 @@ Seventy3 shows you the band and steers the radio.
 
 *Demo mode: simulated rig and band, so you can try it without hardware.*
 
+**New to Seventy3?** The [Quick Start Guide](docs/Seventy3-Quick-Start.pdf)
+(PDF, 5 pages) walks through setup step by step, with an everyday-use
+reference and troubleshooting. It's ready to print or share, and it's also
+attached to every [release](https://github.com/KK4ODA/Seventy3/releases/latest).
+
 ## What it does
 
 - **Panadapter and waterfall centred on the dial.** Zoom from about 1.6 MHz
