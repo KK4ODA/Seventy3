@@ -1,7 +1,8 @@
 name: Release
 
 # Builds seventy3.exe on Windows, writes the update manifest (release.json),
-# signs it, and publishes a GitHub release with all three files.
+# signs it, and publishes a GitHub release with those files and the Quick
+# Start Guide (docs/Seventy3-Quick-Start.pdf).
 #
 # Start it by pushing a tag (v0.2.0), or from the Actions tab with a version
 # (the tag is then created on the chosen branch's commit).
@@ -80,7 +81,7 @@ jobs:
             echo
             echo '---'
             echo
-            echo '**Install:** download `seventy3.exe` below and run it; no installer needed. First time? The [README](https://github.com/KK4ODA/Seventy3#windows-setup) covers the RTL-SDR driver and CAT setup.'
+            echo '**Install:** download `seventy3.exe` below and run it; no installer needed. First time? Follow the **Quick Start Guide** (`Seventy3-Quick-Start.pdf`, below): it covers the RTL-SDR driver, connecting the TS-480, calibration and a first transmit test.'
             echo
             echo '**Already using Seventy3?** It offers this update by itself and installs it with one click. Updates are signed, and Seventy3 checks the signature and the SHA-256 of the program before installing.'
           } > release-body.md
@@ -90,6 +91,15 @@ jobs:
 
       - name: Build
         run: cargo build --release --locked
+
+      - name: Add the Quick Start Guide
+        run: |
+          cp docs/Seventy3-Quick-Start.pdf dist/
+          # The guide carries its version in the PDF's subject; see tools/quick-start.
+          MINOR="${VERSION%.*}"
+          if ! grep -aq "Seventy3 $MINOR with" docs/Seventy3-Quick-Start.pdf; then
+            echo "::warning::The Quick Start Guide isn't for version $MINOR. Regenerate it with tools/quick-start/make_guide.py."
+          fi
 
       - name: Write the update manifest
         run: |
@@ -120,7 +130,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          FILES="dist/seventy3.exe dist/release.json"
+          FILES="dist/seventy3.exe dist/release.json dist/Seventy3-Quick-Start.pdf"
           if [ "$SIGNED" = "true" ]; then FILES="$FILES dist/release.json.sig"; fi
           if gh release view "$TAG" >/dev/null 2>&1; then
             # Re-run (usually to sign a draft): replace the files.
